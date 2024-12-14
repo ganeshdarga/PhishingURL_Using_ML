@@ -1,43 +1,64 @@
 
+from django.shortcuts import render
+from rest_framework import viewsets
+from rest_framework.response import Response
+from django.contrib.auth.hashers import check_password
+
+from rest_framework import status
 
 
+import datetime
+from rest_framework.decorators import action
+import pickle as pkl
+
+from phishingapp.models import phishing
+from phishingapp.serializers import phishingSerializers
 from django.shortcuts import render
 import joblib,os
 import numpy as np
 import pandas as pd
 # import MySQLdb
+import psycopg2
 import mysql.connector
 from sklearn import metrics 
 import warnings
 warnings.filterwarnings('ignore')
 from feature import FeatureExtraction  # Assuming the FeatureExtraction class is in a file named feature_extraction.py in the same directory as your Django view
 
-conn = mysql.connector.connect(
-    host="localhost",
-    user="root",
-    password="root123",
-    database="phishingURL"
-)
-cursor = conn.cursor()
-#pkl
+
+
+class phishingViewSet(viewsets.ModelViewSet):
+    queryset = phishing.objects.all()
+    serializer_class = phishingSerializers
+
+    @action(detail=False, methods=['post'])
+    def addphishing(self,request):
+        addPhishing = request.data.get("addPhishing")
+        addType = request.data.get("addType")
+
+        try:
+            new_request = phishing.objects.create(phishing_URL=addPhishing,type=addType)
+            serializer = phishingSerializers(new_request,cotext={'request':request})
+            return Response(phishingSerializers(new_request).data,status=201)
+        except Exception as e:
+            print(e)
+            return Response({"message":'unable to set data'},status=400)
+
+
 
 def index(request):
     phish_model = open('templates/model.pkl','rb')
     phish_model_ls = joblib.load(phish_model)
     percent1 = 100
-    if request.method == 'GET':  
-        y_pred = 0
-        search_text = request.GET.get("search_box")
-        
+    result = ""
 
-        cursor.execute("SELECT * from phishing_sites where phishing_URL = %s",(search_text,))
-        row = cursor.fetchall()
+    search_text = request.GET.get("search_box")
+    if search_text:  
+        site = phishing.objects.filter(phishing_URL=search_text).first()
         
-        if row:
-            if row[0][1] == -1:
-                y_pred = -1
-            elif row[0][1] == 1:
-                y_pred = 1
+        
+        if site:
+            y_pred = site.type
         else:
             if search_text:
                 feature_extraction = FeatureExtraction(search_text)
@@ -52,22 +73,13 @@ def index(request):
 
         if y_pred == 1:
             result = "Secure"
-            if not row:
-                try:
-                    cursor.execute("INSERT INTO phishing_sites (phishing_URL,type) VALUES (%s,%s)", (search_text,1))
-                    conn.commit()
-                except mysql.connector.IntegrityError:
-                    pass
+            if not site:
+                phishing.objects.create(phishing_URL=search_text, type=1)
+                
         else:
             result = "NotSecure"
-            if not row:
-                try:
-                    # cursor.execute("INSERT INTO phishing_sites (phishing_URL) VALUES (%s)", (search_text,))
-                    cursor.execute("INSERT INTO phishing_sites (phishing_URL,type) VALUES (%s,%s)", (search_text,-1))
-                    conn.commit()
-                except mysql.connector.IntegrityError:
-                    # URL already exists in the blacklist table
-                    pass
+            if not site:
+                phishing.objects.create(phishing_URL=search_text, type=-1)
 
 
     return render(request, "index.html", {'search_text':result,'text':search_text,'percent':percent1})
